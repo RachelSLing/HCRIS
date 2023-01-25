@@ -1,0 +1,174 @@
+---
+title: "Homework2"
+author: "Rachel Ling"
+date: ""
+header-includes:
+  - \usepackage{booktabs}
+output: 
+  bookdown::pdf_document2:
+    fig_caption: yes
+    toc: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, ggplot2, dplyr, lubridate, stringr, readxl, data.table, gdata, scales,
+               kableExtra)
+
+HCRIS_Data_v1996 <- readRDS("/Users/rachelling/Downloads/HCRIS_Data_v1996.rds")
+HCRIS_Data_v2010 <- readRDS("/Users/rachelling/Downloads/HCRIS_Data_v2010.rds")
+```
+
+# Summarize the data
+## How many hospitals submitted the 1996 version of the HCRIS reports in 2010? How is that even possible?
+```{r}
+hospitals_num <- HCRIS_Data_v1996[HCRIS_Data_v1996$year== '2010', ]
+print(as.numeric(count(hospitals_num %>% ungroup())))
+```
+
+According to the data, 3851 hospitals submitted the 1996 version of the HCRIS reports in 2010. This is possible since changes in fiscal year result in duplicate reports from the same hospital. 
+
+## How many hospitals filed more than one report in the same year? Show your answer as a line graph of the number of hospitals over time. 
+```{r}
+  ggplot(duplicate.hcris, aes(x=fyear)) + geom_freqpoly(aes(y=..count..), binwidth=3) + ggtitle("Number of Hospitals with Multiple Reports") + xlab("Year") + ylab("Number of Hospitals") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
+## After removing/combining multiple reports, how many unique hospital IDs (Medicare provider numbers) exist in the data? Provide a line graph plotting the number of hospitals in each year.
+
+```{r}
+ sort(unique(duplicate.hcris2$provider_number))
+ ggplot(duplicate.hcris2, aes(x=fyear)) + geom_freqpoly(aes(y=..count..), binwidth=3) + ggtitle("Number of Unique Hospital IDs") + xlab("Year") + ylab("Number of Hospitals") + theme(plot.title = element_text(hjust = 0.5))
+```
+There are 1573 unique hospital IDS in the data. 
+## What is the distribution of total charges (tot_charges in the data) in each year? Show your results with a “violin” plot, with charges on the y-axis and years on the x-axis. For a nice tutorial on violin plots, look at Violin Plots with ggplot2.
+```{r}
+tot.charges <- ggplot(HCRIS_Data, aes(x=year, y=tot_charges, fill="")) + geom_violin() +
+  scale_y_continuous(trans = "log10") + ggtitle("Distribution of Total Charges") + xlab("Year") + ylab("Total Charges scaled by log10") + theme(plot.title = element_text(hjust = 0.5))
+print(tot.charges)
+```
+
+## Create the same violin plot with estimated prices on the y-axis. Recall our formula for estimating prices from class.
+```{r} 
+#Price Formula from Slides
+price.estimate <- HCRIS_Data %>%
+  mutate( discount_factor = 1-tot_discounts/tot_charges,
+          price_num = (ip_charges + icu_charges + ancillary_charges)*discount_factor - tot_mcare_payment,
+          price_denom = tot_discharges - mcare_discharges,
+          price = price_num/price_denom)
+#Violin Plot of Prices over Time
+ggplot(price.estimate, aes(x = as.character(year), y=price, )) + 
+  geom_violin(fill="light blue") + scale_y_continuous(trans = "log10") + ggtitle("Distribution of Prices") + xlab("Year") + ylab("Price scaled by log10") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+#Estimate ATEs
+
+##Calculate the average price among penalized versus non-penalized hospitals.
+```{r}
+final.hcris <- price.estimate %>% ungroup() %>%
+  filter(price_denom>100, !is.na(price_denom), 
+         price_num>0, !is.na(price_num),
+         price<100000, 
+         beds>30, year==2012) %>% 
+  mutate( hvbp_payment = ifelse(is.na(hvbp_payment),0,hvbp_payment),
+          hrrp_payment = ifelse(is.na(hrrp_payment),0,abs(hrrp_payment)),
+    penalty = (hvbp_payment-hrrp_payment<0)) 
+
+mean.pen <- round(mean(final.hcris$price[which(final.hcris$penalty==1)]),2)
+mean.nopen <- round(mean(final.hcris$price[which(final.hcris$penalty==0)]),2)
+mean.pen
+mean.nopen
+```
+
+##Split hospitals into quartiles based on bed size. To do this, create 4 new indicator variables, where each variable is set to 1 if the hospital’s bed size falls into the relevant quartile.
+
+```{r}
+bed.size.quartiles <- final.hcris %>%
+  mutate(bed.quantile = ntile(beds, 4), 
+bed.quartile1=if_else(bed.size.quartiles$bed.quantile==1, 1, 0),
+bed.quartile2=if_else(bed.size.quartiles$bed.quantile==2, 1, 0), 
+bed.quartile3=if_else(bed.size.quartiles$bed.quantile==3, 1, 0),
+bed.quartile4=if_else(bed.size.quartiles$bed.quantile==4, 1, 0))
+
+```
+
+
+
+##Find the average treatment effect using nearest neighbor matching (1-to-1) with inverse variance distance based on quartiles of bed size.
+```{r}
+lp.vars <- bed.size.quartiles %>% 
+  select(beds, mcaid_discharges, penalty, ip_charges, 
+         mcare_discharges, tot_mcare_payment, price, bed.quartile1, bed.quartile2, bed.quartile3, bed.quartile4, bed.quantile) %>%
+  filter(complete.cases(.))
+lp.covs <- lp.vars %>% select(-c( "bed.quantile","price"))
+
+m.nn.var <- Matching::Match(Y=lp.vars$price,
+                            Tr=lp.vars$bed.quartile1,
+                            X=lp.covs,
+                            M=4,
+                            Weight=1,
+                            estimand="ATE")
+summary(m.nn.var)
+```
+
+
+##Find the average treatment effect using nearest neighbor matching (1-to-1) with Mahalanobis distance based on quartiles of bed size.
+```{r}
+m.nn.md <- Matching::Match(Y=lp.vars$price,
+                           Tr=lp.vars$bed.quartile1,
+                           X=lp.covs,
+                           M=1,
+                           Weight=2,
+                           estimand="ATE")  
+summary(m.nn.md)
+```
+
+##Find the average treatment effect using inverse propensity weighting, where the propensity scores are based on quartiles of bed size.
+```{r}
+logit.model <- glm(penalty ~ beds + mcaid_discharges + ip_charges + mcare_discharges +
+            tot_mcare_payment + bed.quartile1 + bed.quartile2 + bed.quartile3 + bed.quartile4,, family=binomial, data=lp.vars)
+ps <- fitted(logit.model)
+lp.vars <- lp.vars %>%
+  mutate(ipw = case_when(
+    penalty==1 ~ 1/ps,
+    penalty==0 ~ 1/(1-ps),
+    TRUE ~ NA_real_
+  ))
+mean.t1 <- lp.vars %>% filter(penalty==1) %>%
+  select(price, ipw) %>% summarize(mean_p=weighted.mean(price,w=ipw))
+mean.t0 <- lp.vars %>% filter(penalty==0) %>%
+  select(price, ipw) %>% summarize(mean_p=weighted.mean(price,w=ipw))
+mean.t1$mean_p - mean.t0$mean_p
+
+ipw.reg <- lm(price ~ penalty, data=lp.vars, weights=ipw)
+summary(ipw.reg)
+```
+
+##Find the average treatment effect using a single linear regression.
+```{r}
+reg.dat <- lp.vars %>% ungroup() %>% filter(complete.cases(.)) %>%
+  mutate(beds_diff = penalty*(beds - mean(beds)),
+         mcaid_diff = penalty*(mcaid_discharges - mean(mcaid_discharges)),
+         ip_diff = penalty*(ip_charges - mean(ip_charges)),
+         mcare_diff = penalty*(mcare_discharges - mean(mcare_discharges)),
+         mpay_diff = penalty*(tot_mcare_payment - mean(tot_mcare_payment)))
+reg <- lm(price ~ penalty + beds + mcaid_discharges + ip_charges + mcare_discharges + tot_mcare_payment + 
+            beds_diff + mcaid_diff + ip_diff + mcare_diff + mpay_diff,
+          data=reg.dat)
+summary(reg)
+```
+
+##With these different treatment effect estimators, are the results similar, identical, very different?
+```{r}
+
+```
+
+##Do you think you’ve estimated a causal effect of the penalty? Why or why not? (just a couple of sentences)
+```{r}
+
+```
+
+
