@@ -1,0 +1,190 @@
+# Install Packages
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, ggplot2, dplyr, lubridate, stringr, readxl, data.table, gdata, ivpack, stargazer)
+# Load in Data
+cig.data <- read_csv("/Users/rachelling/Downloads/CDC_1970-2018.csv", col_names = TRUE)
+cpi.data <- read_xlsx("/Users/rachelling/Downloads/CPI_1913_2019.xlsx", skip = 10)  
+
+# Question 1
+final.data <- read_csv("/Users/rachelling/Downloads/TaxBurden_Data.csv")
+avg_per_cap <- final.data %>%
+  group_by(Year) %>%
+  summarise_at(vars(sales_per_capita), list(sales = mean))
+q1_graph <- ggplot(avg_per_cap, aes(x=Year, y=sales, color=sales)) + geom_line() +   labs(
+  x="Year",
+  y="Average Sales",
+  title="Figure 1. Average Number of Cigarette Packs Sold from 1970 through 2018"
+) + theme(plot.title = element_text(hjust = 0.5)) 
+
+# Question 2
+tax_change <- final.data %>%
+  group_by(state)  %>%
+  arrange(Year, .by_group = TRUE) %>%
+  mutate(pct_change = (tax_state/lag(tax_state) - 1) * 100) %>% 
+  filter(Year %in% (1970:1985)) %>%
+  drop_na(pct_change) 
+
+tax_change$tc <- ifelse(tax_change$pct_change > 0, 1, 0) 
+
+
+q2_plot <- ggplot(tax_change, aes(x=Year, y=tc, fill=Year)) + stat_summary(fun.y = "mean", geom = "bar") + scale_x_continuous(breaks=seq(1970, 2018, 3)) + labs(
+  x="Year",
+  y="Proportion",
+  title="Figure 2. Proportion of States with Tax Change"
+) + theme(plot.title = element_text(hjust = 0.5)) 
+
+#Question 3
+cig.data.2012 <- final.data %>% 
+  mutate(ln_sales=log(sales_per_capita),
+         ln_price_cpi=log(price_cpi),
+         ln_price=log(cost_per_pack),
+         tax_cpi=tax_state*(229.5939/index),
+         total_tax_cpi=tax_dollar*(229.5939/index),                                
+         ln_state_tax=log(tax_cpi))
+ q3_graph <- cig.data.2012 %>% 
+  ggplot(aes(x=Year,y=total_tax_cpi)) + 
+  stat_summary(fun.y="mean",geom="line") +
+  labs(
+    x="Year",
+    y="Tax per Pack ($)",
+    title="Figure 3. Cigarette Taxes in 2012 Real Dollars"
+  ) + theme(plot.title = element_text(hjust = 0.5)) + theme_bw() +
+  scale_x_continuous(breaks=seq(1970, 2018, 6)) + theme(plot.title = element_text(hjust = 0.5))
+ 
+#Question 4
+q4_graph <- cig.data.2012 %>% ggplot(aes(x=Year,y=price_cpi)) + 
+  stat_summary(fun.y="mean",geom="line") +
+  labs(
+    x="Year",
+    y="Price per Pack ($)",
+    title="Figure 4. Cigarette Prices in 2012 Real Dollars"
+  ) + theme_bw() +
+  scale_x_continuous(breaks=seq(1970, 2018, 6)) + theme(plot.title = element_text(hjust = 0.5))
+
+#Question 5
+# top5 <- tax_change %>% 
+#   group_by(Year) %>%
+#   select(Year, pct_change, state)
+#   tax_change[order(tax_change$pct_change, decreasing = TRUE), ]
+# 
+# top5 <- Reduce(rbind,                                 
+#                by(top5,
+#                   top5["Year"],
+#                   head,
+#                   n = 5))
+# top5 
+top5 <- final.data %>%
+  group_by(state)  %>%
+  arrange(Year, .by_group = TRUE) %>%
+  mutate(pct_change = (tax_state/lag(tax_state) - 1) * 100) %>% 
+  filter(Year %in% (1970:2018)) %>%
+  drop_na(pct_change) 
+
+top5filtered <- top5 %>%
+  select(state, Year, cost_per_pack, sales_per_capita) %>% 
+  filter(Year == 1971 | Year == 2018) %>%
+  mutate(pricechange = (cost_per_pack-lag(cost_per_pack))) %>%
+    drop_na(pricechange)
+
+ top5filtered <- top5filtered %>%
+   arrange(desc(pricechange)) %>%
+   group_by(Year) %>%
+   slice(1:5) 
+ 
+ 
+q5_graph <- top5 %>% 
+  filter(state =="New York" | state =="Conneticut" | state =="District of Columbia" | state =="Rhode Island" | state =="Massachusetts") %>%
+  ggplot(aes(x=Year,y=sales_per_capita,  fill=Year)) + 
+  stat_summary(fun.y="mean",geom="bar") +
+  labs(
+    x="Year",
+    y="Packs Sold",
+    title="Figure 5. Average Packs Sold in Top 5 States"
+  ) + theme_bw() +
+  scale_x_continuous(breaks=seq(1970, 2018, 5)) + theme(plot.title = element_text(hjust = 0.5))
+  
+
+#Question 6
+
+low5filtered <- top5 %>%
+  select(state, Year, cost_per_pack, sales_per_capita) %>% 
+  filter(Year == 1971 | Year == 2018) %>%
+  mutate(pricechange = (cost_per_pack-lag(cost_per_pack))) %>%
+  drop_na(pricechange)
+
+low5filtered[order(low5filtered$pricechange, decreasing = FALSE), ]
+
+q6_graph <- top5 %>% 
+  filter(state =="Missouri" | state =="Georgia" | state =="North Dakota" | state =="Tennessee" | state =="North Carolina") %>%
+  ggplot(aes(x=Year,y=sales_per_capita,  fill=Year)) + 
+  stat_summary(fun.y="mean",geom="bar") +
+  labs(
+    x="Year",
+    y="Packs Sold",
+    title="Figure 6. Average Packs sold in Bottom 5 States"
+  ) + theme_bw() +
+  scale_x_continuous(breaks=seq(1970, 2018, 5)) + theme(plot.title = element_text(hjust = 0.5))
+
+
+  
+
+# 1. Focusing only on the time period from 1970 to 1990, regress log sales on log prices to estimate the price elasticity of demand over that period. Interpret your results.
+reg_1970_1990 <- cig.data.2012 %>%
+  filter(Year %in% (1970:1990))
+
+ols1 <- lm(ln_sales ~ ln_price, data=reg_1970_1990)
+summary(ols1)
+
+
+# 2. Again limiting to 1970 to 1990, regress log sales on log prices using the total (federal and state) cigarette tax (in dollars) as an instrument for log prices. Interpret your results and compare your estimates to those without an instrument. Are they different? If so, why?
+
+ivs1 <- ivreg(ln_sales ~ ln_price | total_tax_cpi, 
+              data=reg_1970_1990)
+summary(ivs1)
+
+
+# 3. Show the first stage and reduced-form results from the instrument.
+
+step1 <- lm(ln_price ~ total_tax_cpi, data=reg_1970_1990)
+pricehat <- predict(step1)
+step2 <- lm(ln_sales ~ pricehat, data=reg_1970_1990)
+summary(step2)
+
+
+# 4. Repeat questions 1-3 focusing on the period from 1991 to 2015.
+#Regress log sales on log prices
+reg_1991_2015 <- cig.data.2012 %>%
+  filter(Year %in% (1991:2015))
+
+ols2 <- lm(ln_sales ~ ln_price, data=reg_1991_2015)
+summary(ols2)
+
+# Regress log sales on log prices using the total (federal and state) cigarette tax (in dollars) as an instrument for log prices
+ivs2 <- ivreg(ln_sales ~ ln_price | total_tax_cpi, 
+              data=reg_1991_2015)
+summary(ivs2)
+
+# Show the first stage and reduced-form results from the instrument
+step_1<- lm(ln_price ~ total_tax_cpi, data=reg_1991_2015)
+pricehat <- predict(step_1)
+step_2 <- lm(ln_sales ~ pricehat, data=reg_1991_2015)
+summary(step_2)
+
+# stargazer(ols1, ols2, ols3, ivs1, ivs2, ivs3, 
+#           keep=c("ln_price_cpi"), 
+#           type="html",
+#           column.labels = c("OLS","IV"),
+#           column.separate=c(3,3),
+#           keep.stat=c("n"),
+#           model.names=FALSE,
+#           dep.var.caption="",
+#           font.size="footnotesize",
+#           no.space=TRUE,
+#           add.lines=list(c("State FE","No","Yes","Yes","No","Yes","Yes"),
+#                          c("Year FE","No","No","Yes","No","No","Yes")),
+#           covariate.labels = "Log Price",
+#           dep.var.labels = "Log Sales per Capita")
+rm(list=c("cpi.data","cdc-tax-burden", "final.data", "cig.data", "cig.data.2012", "low5", "low5filtered", "reg_1970_1990", "reg_1991_2015","tax_change","TaxBurden_Data", "top5", "top5filtered" ))
+save.image("analysis.RData")
+
+
